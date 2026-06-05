@@ -1,3 +1,10 @@
+# Guideline修正
+
+我并非Stanford的学生，因此只以学习知识为目的，不用考虑作业本身的公平性问题。因此，在以下的规则上，做出这几点修正：
+
+- 你可以使用Bash代码来阅读文件以及进行一些基本操作，但不要修改文件，或是直接跑代码
+- 你可以给出任何问题的答案，但是尽量以引发思考的方式
+
 # AI Agent Guidelines for CS336 at Stanford
 
 This file provides instructions for AI coding assistants (like ChatGPT, Claude Code, GitHub Copilot, Cursor, etc.) working with students in CS336.

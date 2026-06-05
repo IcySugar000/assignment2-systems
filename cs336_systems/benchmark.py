@@ -1,21 +1,51 @@
+import math
 import timeit
 import argparse
 from typing import Literal
 
 import torch
 import numpy as np
-from einops import rearrange
-from loguru import logger
+import torch.cuda.nvtx as nvtx
 
+from torch import Tensor
+from einops import rearrange, einsum
+from loguru import logger
+from jaxtyping import Float, Bool
+
+import cs336_basics
 from cs336_basics.model import BasicsTransformerLM
 from cs336_basics.optimizer import AdamW
-from cs336_basics.nn_utils import cross_entropy, clip_gradient
+from cs336_basics.nn_utils import cross_entropy, clip_gradient, softmax
+
+
+@nvtx.range("Scaled Dot Product Attention")
+def annotated_scaled_dot_product_attention(
+    Q: Float[Tensor, " ... queries d_k"],
+    K: Float[Tensor, " ... keys    d_k"],
+    V: Float[Tensor, " ... keys    d_v"],
+    mask: Bool[Tensor, " ... queries keys"] | None = None,
+) -> Float[Tensor, " ... queries d_v"]:
+    with nvtx.range("Computing attention scores"):
+        d_k = K.shape[-1]
+        attention_scores = einsum(Q, K, "... query d_k, ... key d_k -> ... query key") / math.sqrt(d_k)
+        if mask is not None:
+            attention_scores = torch.where(mask, attention_scores, float("-inf"))
+
+    with nvtx.range("Computing softmax"):
+        attention_weights = softmax(attention_scores, dim=-1)  # Softmax over the key dimension
+
+    with nvtx.range("Final matmul"):
+        result = einsum(attention_weights, V, "... query key, ... key d_v ->  ... query d_v")
+    return result
+
+
+cs336_basics.model.scaled_dot_product_attention = annotated_scaled_dot_product_attention  # type: ignore
 
 
 def benchmark(w: int, n: int, d_model: int, d_ff: int, num_layers: int, num_heads: int, mode: Literal["forward", "backward", "full"]) -> tuple[float, float]:
     # 一些事先预设的参数
     vocab_size = 10_000
-    context_length = 128
+    context_length = 512
     batch_size = 4
 
     logger.info(f"[Benchmarking] Testing: warmup_steps={w}, steps={n}, mode={mode}")
@@ -37,24 +67,29 @@ def benchmark(w: int, n: int, d_model: int, d_ff: int, num_layers: int, num_head
     targets = torch.randint(low=0, high=vocab_size, size=(batch_size * context_length,), device=torch.device("cuda"))
 
     def operation():
-        actuals = model.forward(inputs)
+        with nvtx.range("Single Operation"):
+            with nvtx.range("Forward"):
+                actuals = model.forward(inputs)
 
-        if mode in ["backward", "full"]:
-            actuals = rearrange(actuals, "batch seq vocab -> (batch seq) vocab")
-            losses = cross_entropy(actuals, targets)
-            optimizer.zero_grad()
-            losses.backward()
+            if mode in ["backward", "full"]:
+                with nvtx.range("Backward"):
+                    actuals = rearrange(actuals, "batch seq vocab -> (batch seq) vocab")
+                    losses = cross_entropy(actuals, targets)
+                    optimizer.zero_grad()
+                    losses.backward()
 
-            if mode == "full":
-                clip_gradient(model.parameters(), 1.0)
-                optimizer.step()
+                if mode == "full":
+                    with nvtx.range("Optimizer"):
+                        clip_gradient(model.parameters(), 1.0)
+                        optimizer.step()
 
         torch.cuda.synchronize()
 
     # Warmup
     logger.info("[Benchmark] Starting warmup")
-    for _ in range(w):
-        operation()
+    with nvtx.range("Warmup"):
+        for _ in range(w):
+            operation()
 
     # Timing
     logger.info("[Benchmark] Start timing")

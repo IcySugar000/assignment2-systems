@@ -65,3 +65,44 @@ TODO: 看看要不要再缩小一下context_length
 无warm-up会让平均结果和标准差都增加，而加了一点warm-up后就会缓解
 
 无warm-up时前几轮运行较慢，后面变快，从而影响标准差。有warm-up时启动的几轮会计入warm-up中，后续实验数值记录会更准确
+
+### nsys_profile
+
+出于显存限制，我只测试了`small`参数量的模型
+
+(a)
+
+| Context Length | 128 | 256 | 512 |
+| - | - | - | - |
+| Forward Time - Python | 0.023 | 0.044 | 0.101 |
+| Forward Time - nsys | 0.020 | 0.021 | 0.023 |
+
+不match：Python测量的时间会随着context增长而明显增长，而nsys测量出的forward本身的时间增长幅度很小
+
+(b)
+
+对于512 context length：
+- `ampere_sgemm_128x64_tn`
+- 1275
+- 是的。但后者的时间占用分布会均匀一些，不像前者中此项绝对领先
+
+(c)
+
+- `vectorized_elementwise_kernel`：逐元素操作kernel，会尽量一次处理多个连续元素
+- `elementwise_kernel`：同为逐元素操作kernel，但是更泛化
+- `reduce_kernel`：做reduce操作（即多个元素汇总成更少的元素）的kernel
+
+(d)
+
+- 其他矩阵乘法的kernel耗时占比上升，且与(b)中占比最高的kernel的占比接近
+- 其他kernel的占比变数不大
+
+(e)
+
+| Computation | Runtime | FLOPs |
+| - | - | - |
+| Attention Scores | 145.93μs | 1,623,195,648 |
+| Softmax | 66.91μs | 62,865,408 |
+| Final Matmul | 106.99μs | 1,610,612,736 |
+
+Runtime与FLOPs基本同大同小
