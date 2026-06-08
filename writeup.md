@@ -106,3 +106,39 @@ TODO: 看看要不要再缩小一下context_length
 | Final Matmul | 106.99μs | 1,610,612,736 |
 
 Runtime与FLOPs基本同大同小
+
+### mixed_precision_accumulation
+
+结果：
+
+```text
+tensor(10.0001)
+tensor(9.9531, dtype=torch.float16)
+tensor(10.0021)
+tensor(10.0021)
+```
+
+精度：全FP32 > FP16使用FP32累积 > 全FP16
+
+### benchmarking_mixed_precision
+
+(a)
+
+- FP32：autocast不会真的更改模型参数类型
+- FP16：矩阵乘法，很适合被autocast
+- FP32：包含reduce类对数值精度更敏感的内容
+- FP16：ReLU一般不改变dtype
+- FP32：为了稳定性，需要FP32
+- FP32：与实际参数类型有关
+
+(b)
+
+- 在取平均值时需要做sum
+- 可以不，因为其数据动态范围更大；但是精度方面依然存在局限，因此使用FP32会更好
+
+(c)
+
+| size | no-mixed | mixed-precision |
+| - | - | - |
+| small | 0.289 | 0.174 |
+| medium | 

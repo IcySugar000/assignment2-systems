@@ -2,6 +2,7 @@ import math
 import timeit
 import argparse
 from typing import Literal
+from contextlib import nullcontext
 
 import torch
 import numpy as np
@@ -42,7 +43,9 @@ def annotated_scaled_dot_product_attention(
 cs336_basics.model.scaled_dot_product_attention = annotated_scaled_dot_product_attention  # type: ignore
 
 
-def benchmark(w: int, n: int, d_model: int, d_ff: int, num_layers: int, num_heads: int, mode: Literal["forward", "backward", "full"]) -> tuple[float, float]:
+def benchmark(
+    w: int, n: int, d_model: int, d_ff: int, num_layers: int, num_heads: int, mode: Literal["forward", "backward", "full"], mixed_precision: bool = False
+) -> tuple[float, float]:
     # 一些事先预设的参数
     vocab_size = 10_000
     context_length = 512
@@ -66,24 +69,27 @@ def benchmark(w: int, n: int, d_model: int, d_ff: int, num_layers: int, num_head
     inputs = torch.randint(low=0, high=vocab_size, size=(batch_size, context_length), device=torch.device("cuda"))
     targets = torch.randint(low=0, high=vocab_size, size=(batch_size * context_length,), device=torch.device("cuda"))
 
+    precision_context = torch.autocast(device_type="cuda", dtype=torch.float16) if mixed_precision else nullcontext()
+
     def operation():
-        with nvtx.range("Single Operation"):
-            with nvtx.range("Forward"):
-                actuals = model.forward(inputs)
+        with precision_context:
+            with nvtx.range("Single Operation"):
+                with nvtx.range("Forward"):
+                    actuals = model.forward(inputs)
 
-            if mode in ["backward", "full"]:
-                with nvtx.range("Backward"):
-                    actuals = rearrange(actuals, "batch seq vocab -> (batch seq) vocab")
-                    losses = cross_entropy(actuals, targets)
-                    optimizer.zero_grad()
-                    losses.backward()
+                if mode in ["backward", "full"]:
+                    with nvtx.range("Backward"):
+                        actuals = rearrange(actuals, "batch seq vocab -> (batch seq) vocab")
+                        losses = cross_entropy(actuals, targets)
+                        optimizer.zero_grad()
+                        losses.backward()
 
-                if mode == "full":
-                    with nvtx.range("Optimizer"):
-                        clip_gradient(model.parameters(), 1.0)
-                        optimizer.step()
+                    if mode == "full":
+                        with nvtx.range("Optimizer"):
+                            clip_gradient(model.parameters(), 1.0)
+                            optimizer.step()
 
-        torch.cuda.synchronize()
+            torch.cuda.synchronize()
 
     # Warmup
     logger.info("[Benchmark] Starting warmup")
@@ -156,6 +162,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_heads", type=int)
     parser.add_argument("-s", "--size", type=str, choices=["small", "medium", "large", "xl", "10B"])
     parser.add_argument("--mode", type=str, choices=["forward", "backward", "full"], default="forward")
+    parser.add_argument("--mixed_precision", action="store_true")
 
     args = parser.parse_args()
 
@@ -179,4 +186,4 @@ if __name__ == "__main__":
             logger.error("[Benchmarking] Model params must be filled if 'size' arg is not provided.")
             exit()
 
-    benchmark(warmup_steps, steps, d_model, d_ff, num_layers, num_heads, mode)
+    benchmark(warmup_steps, steps, d_model, d_ff, num_layers, num_heads, mode, mixed_precision=True if args.mixed_precision else False)
