@@ -138,7 +138,11 @@ tensor(10.0021)
 
 (c)
 
+测试forward+backward，@Google Colab T4
+
 | size | no-mixed | mixed-precision |
 | - | - | - |
-| small | 0.289 | 0.174 |
-| medium | 
+| small | 0.568 | 0.250 |
+| medium | 1.729 | 0.680 |
+
+使用mixed-precision有明显的时间收益，且模型越大，matmul占比越高，mixed-precision收益越明显
