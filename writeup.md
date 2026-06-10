@@ -138,7 +138,7 @@ tensor(10.0021)
 
 (c)
 
-测试forward+backward，@Google Colab T4
+测试forward+backward，@Google Colab T4，`context_length`=512
 
 | size | no-mixed | mixed-precision |
 | - | - | - |
@@ -146,3 +146,66 @@ tensor(10.0021)
 | medium | 1.729 | 0.680 |
 
 使用mixed-precision有明显的时间收益，且模型越大，matmul占比越高，mixed-precision收益越明显
+
+### memory_profiling
+
+由于内存限制，将测量参数改为了`small`参数量的128，512 context length
+
+(a)
+
+`context_length`=128
+
+forward only:
+
+![](assets/memory_profiling_a_1.png)
+
+full step:
+
+![](assets/memory_profiling_a_2.png)
+
+- 图由多个结构相似的尖峰组成
+- 局部高点都在forward阶段
+
+(b)
+
+| | 128 | 512 |
+| - | - | - |
+| forward | ~1.1G | ~3.8G |
+| full | ~2.6G | ~5.5G |
+
+(c)
+
+| | 128 | 512 |
+| - | - | - |
+| forward | ~1.1G | ~2.9G |
+| full | ~2.6G | ~4.6G |
+
+context length较小时，矩阵运算相关的中间变量占比不高，显存占用没有明显降低；对于更高context length的配置来说，能显著节省显存；同时，forward节省的比例比full高
+
+(d)
+
+```text
+size_bytes = batch_size * context_length * d_model * 4
+           = 4 * 2048 * 2560 * 4
+```
+
+大约一个是80MiB
+
+(e)
+
+对于small，512 context length：
+- 78.1MiB
+- 是最终模型LM head输出的logits张量的计算。logits张量的最后一维是整个vocabulary size，远大于d_model
+
+(f)
+
+关于TransformerBlock维度的内存占用与操作内存占比，这部分我没能在nsight GUI上找到对应的查看界面，很可惜。
+
+![](assets/memory_profiling_f_1.png)
+
+基于参数量可以计算每个gradient tensor的内存占用：
+- attention四个Linear Layer：`4 * d_model^2`
+- FFN三个Linear Layer：`3 * d_model * d_ff`
+- 两个RMSNorm Scale：`2 * d_model`
+
+实际使用中并未观察到backward中tensor占用内存被释放，这也许是与PyTorch的cache机制有关

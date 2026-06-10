@@ -1,7 +1,7 @@
 import math
 import timeit
 import argparse
-from typing import Literal
+from typing import Literal, Callable
 from contextlib import nullcontext
 
 import torch
@@ -44,11 +44,19 @@ cs336_basics.model.scaled_dot_product_attention = annotated_scaled_dot_product_a
 
 
 def benchmark(
-    w: int, n: int, d_model: int, d_ff: int, num_layers: int, num_heads: int, mode: Literal["forward", "backward", "full"], mixed_precision: bool = False
+    w: int,
+    n: int,
+    d_model: int,
+    d_ff: int,
+    num_layers: int,
+    num_heads: int,
+    mode: Literal["forward", "backward", "full"],
+    context_length: int = 128,
+    mixed_precision: bool = False,
+    memory_profiling: bool = False,
 ) -> tuple[float, float]:
     # 一些事先预设的参数
     vocab_size = 10_000
-    context_length = 512
     batch_size = 4
 
     logger.info(f"[Benchmarking] Testing: warmup_steps={w}, steps={n}, mode={mode}")
@@ -61,6 +69,8 @@ def benchmark(
         num_heads=num_heads,
         d_ff=d_ff,
     )
+    for block in model.layers:
+        block.forward = nvtx.range("Transformer Block")(block.forward)
     model = model.cuda()
     optimizer = AdamW(
         params=model.parameters(),
@@ -97,11 +107,20 @@ def benchmark(
         for _ in range(w):
             operation()
 
+    # Memory Profiling Setup
+    if memory_profiling:
+        torch.cuda.memory._record_memory_history(max_entries=100_0000)
+
     # Timing
     logger.info("[Benchmark] Start timing")
     time_taken = timeit.repeat(operation, number=1, repeat=n)
     logger.info(f"[Benchmark] Time for {n} rounds: {time_taken}")
     logger.info(f"[Benchmark] Mean: {np.mean(time_taken):.6f}, STD: {np.std(time_taken):.6f}")
+
+    # Memory Profiling Epilog
+    if memory_profiling:
+        torch.cuda.memory._dump_snapshot("memory_snapshot.pickle")
+        torch.cuda.memory._record_memory_history(enabled=None)
 
     return float(np.mean(time_taken)), float(np.std(time_taken))
 
@@ -162,7 +181,9 @@ if __name__ == "__main__":
     parser.add_argument("--num_heads", type=int)
     parser.add_argument("-s", "--size", type=str, choices=["small", "medium", "large", "xl", "10B"])
     parser.add_argument("--mode", type=str, choices=["forward", "backward", "full"], default="forward")
+    parser.add_argument("-c", "--context_length", type=int, default=128)
     parser.add_argument("--mixed_precision", action="store_true")
+    parser.add_argument("--memory_profiling", action="store_true")
 
     args = parser.parse_args()
 
@@ -186,4 +207,15 @@ if __name__ == "__main__":
             logger.error("[Benchmarking] Model params must be filled if 'size' arg is not provided.")
             exit()
 
-    benchmark(warmup_steps, steps, d_model, d_ff, num_layers, num_heads, mode, mixed_precision=True if args.mixed_precision else False)
+    benchmark(
+        w=warmup_steps,
+        n=steps,
+        d_model=d_model,
+        d_ff=d_ff,
+        num_layers=num_layers,
+        num_heads=num_heads,
+        mode=mode,
+        context_length=args.context_length,
+        mixed_precision=bool(args.mixed_precision),
+        memory_profiling=bool(args.memory_profiling),
+    )
